@@ -515,9 +515,9 @@ export const useGatewayStore = create<GatewayState>()(
           // Add attachments if present
           if (attachmentsToSend.length > 0) {
             payload.attachments = attachmentsToSend.map(att => ({
-              name: att.name,
-              type: att.type,
-              buffer: att.buffer,
+              type: "image",
+              mimeType: att.mimeType,
+              content: att.dataUrl.split(',')[1],
             }));
           }
           

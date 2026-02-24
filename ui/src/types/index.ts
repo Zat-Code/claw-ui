@@ -243,10 +243,8 @@ export type ChatMessage = {
 
 export type ChatAttachment = {
   id: string;
-  name: string;
-  type: string;
-  url?: string;
-  buffer?: string; // base64
+  dataUrl: string;
+  mimeType: string;
 };
 
 export type ToolCall = {

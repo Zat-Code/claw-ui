@@ -25,7 +25,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             {message.attachments.map((att) => (
               <div key={att.id} className="flex items-center gap-1 bg-blue-700 px-2 py-1 rounded text-xs">
                 <Paperclip size={12} />
-                <span>{att.name}</span>
+                <span>{att.mimeType}</span>
               </div>
             ))}
           </div>
@@ -99,20 +99,20 @@ function ToolCallItem({ tool }: { tool: ToolCall }) {
 }
 
 function AttachmentItem({ attachment, onRemove }: { attachment: ChatAttachment; onRemove: () => void }) {
-  const isImage = attachment.type.startsWith('image/');
+  const isImage = attachment.mimeType.startsWith('image/');
   
   return (
     <div className="relative flex items-center gap-2 bg-gray-700 px-3 py-2 rounded-lg">
-      {isImage && attachment.buffer && (
+      {isImage && attachment.dataUrl && (
         <img 
-          src={`data:${attachment.type};base64,${attachment.buffer}`} 
-          alt={attachment.name}
+          src={attachment.dataUrl} 
+          alt={attachment.id}
           className="w-10 h-10 object-cover rounded"
         />
       )}
       <div className="flex-1 min-w-0">
-        <p className="text-sm truncate">{attachment.name}</p>
-        <p className="text-xs text-gray-400">{attachment.type}</p>
+        <p className="text-sm truncate">{attachment.mimeType}</p>
+        <p className="text-xs text-gray-400">{attachment.mimeType}</p>
       </div>
       <button
         onClick={onRemove}
@@ -178,12 +178,11 @@ export function ChatPage() {
     Array.from(files).forEach((file) => {
       const reader = new FileReader();
       reader.onload = () => {
-        const base64 = (reader.result as string).split(',')[1];
+        const dataUrl = reader.result as string;
         addChatAttachment({
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          name: file.name,
-          type: file.type,
-          buffer: base64,
+          dataUrl,
+          mimeType: file.type,
         });
       };
       reader.readAsDataURL(file);
