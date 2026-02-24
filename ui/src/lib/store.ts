@@ -12,6 +12,8 @@ import type {
   SkillStatusReport,
   ChatMessage,
   GatewayEventFrame,
+  ChatAttachment,
+  ToolCall,
 } from '@/types';
 import { GatewayClient, createGatewayClient } from './gateway';
 import type { GatewayHelloOk } from '@/types';
@@ -40,6 +42,9 @@ interface GatewayState {
   chatMessages: ChatMessage[];
   chatSessionKey: string;
   chatLoading: boolean;
+  chatAttachments: ChatAttachment[];
+  activeTools: ToolCall[];
+  chatThinking: string;
   
   settings: UiSettings;
   
@@ -67,8 +72,11 @@ interface GatewayState {
   updateSkill: (skillKey: string, patch: { enabled?: boolean; apiKey?: string; env?: Record<string, string> }) => Promise<void>;
   
   setChatSession: (sessionKey: string) => void;
-  sendChatMessage: (message: string) => Promise<void>;
+  sendChatMessage: (message: string, attachments?: ChatAttachment[]) => Promise<void>;
   clearChat: () => void;
+  addChatAttachment: (attachment: ChatAttachment) => void;
+  removeChatAttachment: (id: string) => void;
+  clearChatAttachments: () => void;
 }
 
 const defaultSettings: UiSettings = {
@@ -101,6 +109,9 @@ export const useGatewayStore = create<GatewayState>()(
       chatMessages: [],
       chatSessionKey: 'agent:main:main',
       chatLoading: false,
+      chatAttachments: [],
+      activeTools: [],
+      chatThinking: '',
       
       settings: defaultSettings,
       
@@ -187,7 +198,7 @@ export const useGatewayStore = create<GatewayState>()(
                       ...updated[existingIndex],
                       content,
                     };
-                    return { chatMessages: updated, chatLoading: false };
+                    return { chatMessages: updated, chatLoading: false, chatThinking: '' };
                   } else {
                     return {
                       chatMessages: [
@@ -200,10 +211,77 @@ export const useGatewayStore = create<GatewayState>()(
                         },
                       ],
                       chatLoading: false,
+                      chatThinking: '',
                     };
                   }
                 }
                 
+                return {};
+              });
+            }
+            
+            // Handle tool events
+            if (evt.event === 'tool') {
+              const payload = evt.payload as {
+                runId?: string;
+                toolCallId?: string;
+                toolName?: string;
+                args?: string;
+                output?: string;
+                state?: string;
+              };
+              
+              if (!payload.toolCallId) return;
+              
+              set((state) => {
+                if (!payload.toolCallId) return {};
+                
+                const existingIndex = state.activeTools.findIndex(t => t.id === payload.toolCallId);
+                
+                if (payload.state === 'start') {
+                  const newTool: ToolCall = {
+                    id: payload.toolCallId,
+                    name: payload.toolName || 'unknown',
+                    args: payload.args,
+                    status: 'running',
+                    startedAt: Date.now(),
+                  };
+                  return { activeTools: [...state.activeTools, newTool] };
+                }
+                
+                if (payload.state === 'done' || payload.state === 'error') {
+                  if (existingIndex >= 0) {
+                    const updated = [...state.activeTools];
+                    updated[existingIndex] = {
+                      ...updated[existingIndex],
+                      output: payload.output,
+                      status: payload.state === 'error' ? 'error' : 'done',
+                    };
+                    return { activeTools: updated };
+                  }
+                }
+                
+                return {};
+              });
+            }
+            
+            // Handle thinking events
+            if (evt.event === 'thinking') {
+              const payload = evt.payload as {
+                runId?: string;
+                text?: string;
+                state?: string;
+              };
+              
+              if (!payload.text) return;
+              
+              set((state) => {
+                if (payload.state === 'delta') {
+                  return { chatThinking: state.chatThinking + payload.text };
+                }
+                if (payload.state === 'final') {
+                  return { chatThinking: '' };
+                }
                 return {};
               });
             }
@@ -405,25 +483,45 @@ export const useGatewayStore = create<GatewayState>()(
         });
       },
       
-      sendChatMessage: async (message: string) => {
-        const { client, chatSessionKey, connectionState } = get();
+      sendChatMessage: async (message: string, attachments?: ChatAttachment[]) => {
+        const { client, chatSessionKey, connectionState, chatAttachments } = get();
         if (!client || connectionState !== 'connected') {
           return;
         }
         
-        const userMessage = { role: 'user' as const, content: message, timestamp: Date.now() };
+        const attachmentsToSend = attachments || chatAttachments;
+        const userMessage = { 
+          role: 'user' as const, 
+          content: message, 
+          timestamp: Date.now(),
+          attachments: attachmentsToSend,
+        };
         set((state) => ({
           chatMessages: [...state.chatMessages, userMessage],
           chatLoading: true,
+          chatAttachments: [],
+          activeTools: [],
+          chatThinking: '',
         }));
         
         try {
-          await client.request('chat.send', {
+          const payload: Record<string, unknown> = {
             sessionKey: chatSessionKey,
             message,
             deliver: false,
             idempotencyKey: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          });
+          };
+          
+          // Add attachments if present
+          if (attachmentsToSend.length > 0) {
+            payload.attachments = attachmentsToSend.map(att => ({
+              name: att.name,
+              type: att.type,
+              buffer: att.buffer,
+            }));
+          }
+          
+          await client.request('chat.send', payload);
         } catch (err) {
           console.error('Failed to send message:', err);
           set({ chatLoading: false });
@@ -431,7 +529,23 @@ export const useGatewayStore = create<GatewayState>()(
       },
       
       clearChat: () => {
-        set({ chatMessages: [] });
+        set({ chatMessages: [], chatAttachments: [], activeTools: [], chatThinking: '' });
+      },
+      
+      addChatAttachment: (attachment: ChatAttachment) => {
+        set((state) => ({
+          chatAttachments: [...state.chatAttachments, attachment],
+        }));
+      },
+      
+      removeChatAttachment: (id: string) => {
+        set((state) => ({
+          chatAttachments: state.chatAttachments.filter(a => a.id !== id),
+        }));
+      },
+      
+      clearChatAttachments: () => {
+        set({ chatAttachments: [] });
       },
     }),
     {

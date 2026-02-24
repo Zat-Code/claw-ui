@@ -1,8 +1,8 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useGatewayStore } from '@/lib/store';
 import { Card, CardHeader, CardContent, Button, Input, Select, Badge } from '@/components';
-import { MessageSquare, Send, Trash2, RefreshCw, Bot } from 'lucide-react';
-import type { ChatMessage } from '@/types';
+import { MessageSquare, Send, Trash2, RefreshCw, Bot, Paperclip, X, Loader2, Wrench, CheckCircle, XCircle } from 'lucide-react';
+import type { ChatMessage, ChatAttachment, ToolCall } from '@/types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -19,6 +19,18 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             : 'bg-gray-800 text-gray-100'
         }`}
       >
+        {/* Attachments for user messages */}
+        {isUser && message.attachments && message.attachments.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {message.attachments.map((att) => (
+              <div key={att.id} className="flex items-center gap-1 bg-blue-700 px-2 py-1 rounded text-xs">
+                <Paperclip size={12} />
+                <span>{att.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        
         {isUser ? (
           <p className="whitespace-pre-wrap text-sm">{message.content}</p>
         ) : (
@@ -61,6 +73,57 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   );
 }
 
+function ToolCallItem({ tool }: { tool: ToolCall }) {
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
+      tool.status === 'running' ? 'bg-yellow-900/30 border border-yellow-700' :
+      tool.status === 'done' ? 'bg-green-900/30 border border-green-700' :
+      'bg-red-900/30 border border-red-700'
+    }`}>
+      {tool.status === 'running' ? (
+        <Loader2 size={14} className="animate-spin text-yellow-400" />
+      ) : tool.status === 'done' ? (
+        <CheckCircle size={14} className="text-green-400" />
+      ) : (
+        <XCircle size={14} className="text-red-400" />
+      )}
+      <Wrench size={14} className="text-gray-400" />
+      <span className="font-mono text-blue-400">{tool.name}</span>
+      {tool.output && (
+        <span className="text-gray-400 text-xs truncate max-w-[200px]">
+          → {tool.output.substring(0, 50)}...
+        </span>
+      )}
+    </div>
+  );
+}
+
+function AttachmentItem({ attachment, onRemove }: { attachment: ChatAttachment; onRemove: () => void }) {
+  const isImage = attachment.type.startsWith('image/');
+  
+  return (
+    <div className="relative flex items-center gap-2 bg-gray-700 px-3 py-2 rounded-lg">
+      {isImage && attachment.buffer && (
+        <img 
+          src={`data:${attachment.type};base64,${attachment.buffer}`} 
+          alt={attachment.name}
+          className="w-10 h-10 object-cover rounded"
+        />
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm truncate">{attachment.name}</p>
+        <p className="text-xs text-gray-400">{attachment.type}</p>
+      </div>
+      <button
+        onClick={onRemove}
+        className="p-1 hover:bg-gray-600 rounded"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
 export function ChatPage() {
   const {
     agents,
@@ -69,15 +132,22 @@ export function ChatPage() {
     chatSessionKey,
     chatLoading,
     connectionState,
+    chatAttachments,
+    activeTools,
+    chatThinking,
     loadAgents,
     loadSessions,
     setChatSession,
     sendChatMessage,
     clearChat,
+    addChatAttachment,
+    removeChatAttachment,
+    clearChatAttachments,
   } = useGatewayStore();
   
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (connectionState === 'connected' && sessions?.sessions) {
@@ -99,12 +169,37 @@ export function ChatPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
+  }, [chatMessages, activeTools]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(',')[1];
+        addChatAttachment({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: file.name,
+          type: file.type,
+          buffer: base64,
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [addChatAttachment]);
 
   const handleSend = async () => {
-    if (!input.trim() || chatLoading || connectionState !== 'connected') return;
+    if ((!input.trim() && chatAttachments.length === 0) || chatLoading || connectionState !== 'connected') return;
     const message = input.trim();
     setInput('');
+    clearChatAttachments();
     await sendChatMessage(message);
   };
 
@@ -160,7 +255,7 @@ export function ChatPage() {
               <Badge variant="danger">Not connected</Badge>
             ) : chatLoading ? (
               <Badge variant="info">
-                <RefreshCw size={12} className="mr-1 animate-spin" />
+                <Loader2 size={12} className="mr-1 animate-spin" />
                 Thinking...
               </Badge>
             ) : null}
@@ -173,7 +268,7 @@ export function ChatPage() {
         <CardContent className="flex-1 flex flex-col min-h-0 p-0">
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4">
-            {chatMessages.length === 0 ? (
+            {chatMessages.length === 0 && activeTools.length === 0 && !chatThinking ? (
               <div className="h-full flex flex-col items-center justify-center text-gray-500 dark:text-gray-400">
                 <MessageSquare size={48} className="mb-4 opacity-50" />
                 <p>No messages yet</p>
@@ -181,6 +276,28 @@ export function ChatPage() {
               </div>
             ) : (
               <>
+                {/* Active Tools */}
+                {activeTools.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    <p className="text-xs text-gray-500 uppercase tracking-wide">Tools</p>
+                    {activeTools.map((tool) => (
+                      <ToolCallItem key={tool.id} tool={tool} />
+                    ))}
+                  </div>
+                )}
+                
+                {/* Thinking indicator */}
+                {chatThinking && (
+                  <div className="mb-4 p-3 bg-gray-800 rounded-lg">
+                    <div className="flex items-center gap-2 text-gray-400 text-sm">
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Thinking...</span>
+                    </div>
+                    <p className="text-gray-300 text-sm mt-2 whitespace-pre-wrap">{chatThinking}</p>
+                  </div>
+                )}
+                
+                {/* Messages */}
                 {chatMessages.map((msg, i) => (
                   <MessageBubble key={`${msg.timestamp}-${i}`} message={msg} />
                 ))}
@@ -191,7 +308,37 @@ export function ChatPage() {
 
           {/* Input */}
           <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+            {/* Attachments preview */}
+            {chatAttachments.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {chatAttachments.map((att) => (
+                  <AttachmentItem
+                    key={att.id}
+                    attachment={att}
+                    onRemove={() => removeChatAttachment(att.id)}
+                  />
+                ))}
+              </div>
+            )}
+            
             <div className="flex gap-2 items-end">
+              {/* Attachment button */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileSelect}
+                className="hidden"
+                multiple
+                accept="image/*,.pdf,.txt,.json,.md"
+              />
+              <Button
+                variant="secondary"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={chatLoading || connectionState !== 'connected'}
+              >
+                <Paperclip size={16} />
+              </Button>
+              
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -201,12 +348,12 @@ export function ChatPage() {
                 rows={3}
                 disabled={chatLoading || connectionState !== 'connected'}
               />
-              <Button onClick={handleSend} disabled={!input.trim() || chatLoading || connectionState !== 'connected'} loading={chatLoading}>
+              <Button onClick={handleSend} disabled={(!input.trim() && chatAttachments.length === 0) || chatLoading || connectionState !== 'connected'} loading={chatLoading}>
                 <Send size={16} />
               </Button>
             </div>
             <p className="text-xs text-gray-400 mt-2">
-              Press Enter to send, Shift+Enter for new line
+              Press Enter to send, Shift+Enter for new line • Attach files with paperclip
             </p>
           </div>
         </CardContent>

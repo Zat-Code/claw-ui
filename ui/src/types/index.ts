@@ -236,4 +236,24 @@ export type ChatMessage = {
   content: string;
   timestamp: number;
   runId?: string;
+  attachments?: ChatAttachment[];
+  thinking?: string;
+  tools?: ToolCall[];
+};
+
+export type ChatAttachment = {
+  id: string;
+  name: string;
+  type: string;
+  url?: string;
+  buffer?: string; // base64
+};
+
+export type ToolCall = {
+  id: string;
+  name: string;
+  args?: string;
+  output?: string;
+  status: 'running' | 'done' | 'error';
+  startedAt: number;
 };
