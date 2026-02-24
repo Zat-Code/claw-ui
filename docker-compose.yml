@@ -1,0 +1,17 @@
+services:
+  claw-ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    container_name: claw-ui
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_GATEWAY_URL=ws://localhost:18789
+      - VITE_GATEWAY_TOKEN=${GATEWAY_TOKEN:-}
+    networks:
+      - openclaw-network
+    restart: always
+networks:
+  openclaw-network:
+    external: true

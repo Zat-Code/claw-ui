@@ -1,0 +1,25 @@
+services:
+  claw-ui-dev:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile.dev
+    container_name: claw-ui-dev
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_GATEWAY_URL=ws://localhost:18789
+      - VITE_GATEWAY_TOKEN=${GATEWAY_TOKEN:-}
+    volumes:
+      - ./ui/src:/app/src
+      - ./ui/public:/app/public
+      - ./ui/index.html:/app/index.html
+      - ./ui/vite.config.ts:/app/vite.config.ts
+      - ./ui/tailwind.config.js:/app/tailwind.config.js
+      - ./ui/postcss.config.js:/app/postcss.config.js
+    networks:
+      - openclaw_default
+    restart: unless-stopped
+
+networks:
+  openclaw_default:
+    external: true
